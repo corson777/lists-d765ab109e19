@@ -126,6 +126,7 @@
       <button class="fab" data-act="new-list" aria-label="New list">${I.plus}</button>`;
     renderCards();
     const cards = $('#cards');
+    cards.addEventListener('click', e => { if (e.target.closest('.meals-card')) go('#/meals'); });
     pullToRefresh(cards);
     longPress(cards, '.card', el => listMenu(el.dataset.id));
     cards.addEventListener('click', e => { const c = e.target.closest('.card'); if (c && !wasLong(c)) go('#/list/' + encodeURIComponent(c.dataset.id)); });
@@ -135,12 +136,14 @@
     let ls = Store.lists().map(l => ({ l, m: Store.modified(l), its: Store.items(l.name) }));
     ls.sort(sortBy === 'modified' ? (a, b) => b.m.localeCompare(a.m) || a.l.name.localeCompare(b.l.name) : (a, b) => a.l.name.localeCompare(b.l.name));
     const ptr = el.querySelector('.ptr');
-    el.innerHTML = ls.length ? ls.map(({ l, m, its }) => {
+    const s = Store.settings();
+    const pinned = s.url && s.token ? `<div class="meals-card" role="button"><span class="mc-icon">🍽</span><div class="mc-title">This week's meals &amp; recipes</div><span class="mc-go">›</span></div>` : '';
+    el.innerHTML = pinned + (ls.length ? ls.map(({ l, m, its }) => {
       const [bg, edge] = col(l.color), all = its.length && its.every(i => i.done);
       return `<div class="card" data-id="${esc(l.id)}" style="background:${bg};border-left-color:${edge}">
         <div class="card-title">${esc(l.name)}</div>
         <div class="card-meta">${all ? `<span class="card-check">${I.check}</span>` : ''}<span class="card-date">${shortWhen(m)}</span></div></div>`;
-    }).join('') : '<div class="empty">No lists yet. Tap + to make one.</div>';
+    }).join('') : '<div class="empty">No lists yet. Tap + to make one.</div>');
     if (ptr) el.prepend(ptr);
   }
 
@@ -247,6 +250,77 @@
     if (save) { Store.saveSettings({ ...f, configured: true }); await Sync.run(); Store.seedDefaults(); Sync.run(); go('#/'); }
   }
 
+  // ---------- share a list (how a list gets into ColorNote) ----------
+  // ColorNote has no public API, but it accepts text from Android's share sheet:
+  // pick ColorNote there and it makes a new note. Falls back to copying.
+  async function shareList(name) {
+    const open = Store.items(name).filter(i => !i.done).map(i => '• ' + i.text);
+    const text = name + '\n' + (open.length ? open.join('\n') : '(nothing left on the list)');
+    try {
+      if (navigator.share) { await navigator.share({ title: name, text }); return; }
+      await navigator.clipboard.writeText(text); toast('Copied. Paste it into ColorNote or a message.');
+    } catch (e) { if (e && e.name !== 'AbortError') toast('Could not share: ' + (e.message || e)); }
+  }
+  function toast(t) {
+    const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d);
+    setTimeout(() => d.remove(), 3500);
+  }
+
+  // ---------- this week's meals & recipes (read-only, from the Recipes tab) ----------
+  const DAYS = ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const recipesCache = () => { try { return JSON.parse(localStorage.getItem('cl.recipes')) || null; } catch (e) { return null; } };
+  let recipesBusy = null;
+  function loadRecipes(force) { // keeps a copy on the phone so it works with no signal
+    const c = recipesCache();
+    if (!force && c && Date.now() - (c.at || 0) < 10 * 60000) return Promise.resolve(c);
+    if (recipesBusy) return recipesBusy;
+    recipesBusy = Sync.call({ action: 'recipes' }).then(j => {
+      const v = { at: Date.now(), plan: j.plan || [], recipes: j.recipes || [] };
+      localStorage.setItem('cl.recipes', JSON.stringify(v)); return v;
+    }).catch(e => { if (c) return c; throw e; }).finally(() => { recipesBusy = null; });
+    return recipesBusy;
+  }
+  function mealsBar(title, extra = '') {
+    return `<header class="list-bar" style="background:#7a3e1d"><button class="icon-btn" data-act="back" aria-label="Back">${I.back}</button>
+      <div class="list-title">${esc(title)}</div>${extra}</header>`;
+  }
+  function mealsView() {
+    document.body.className = 'meals';
+    document.querySelector('meta[name=theme-color]').content = '#7a3e1d';
+    app.innerHTML = mealsBar("This week's meals", `<button class="icon-btn" data-act="meals-refresh" aria-label="Refresh recipes">⟳</button>`) +
+      '<main class="scroller meals-body" id="meals"><div class="empty">Loading…</div></main>';
+    const draw = v => {
+      const el = $('#meals'); if (!el || !v) return;
+      const by = {}; v.recipes.forEach(r => { by[r.key] = r; });
+      const days = DAYS.map(d => ({ d, meals: v.plan.filter(p => p.day === d) })).filter(x => x.meals.length);
+      el.innerHTML = days.length ? days.map(x => x.meals.map(m => `<a class="meal-row" href="#/recipe/${encodeURIComponent(m.key)}">
+          <b>${esc(x.d.slice(0, 3))}</b><span>${esc(m.meal)}</span>${by[m.key] && (by[m.key].ingredients.length || by[m.key].steps.length) ? '<i>›</i>' : '<i class="soon">soon</i>'}</a>`).join('')).join('')
+        : '<div class="empty">No meal plan found yet.</div>';
+      el.insertAdjacentHTML('beforeend', `<p class="muted pad">Recipes fill in by themselves within an hour of the plan changing. Updated ${new Date(v.at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.</p>`);
+    };
+    const c = recipesCache(); if (c) draw(c);
+    loadRecipes(false).then(draw).catch(e => { if (!c) $('#meals').innerHTML = `<div class="empty">Couldn't load recipes: ${esc(e.message)}</div>`; });
+  }
+  async function refreshRecipes(btn) {
+    btn.disabled = true; btn.classList.add('spin');
+    try { await Sync.call({ action: 'refreshRecipes' }); await loadRecipes(true); toast('Recipes are up to date.'); }
+    catch (e) { toast('Refresh failed: ' + e.message); }
+    finally { btn.disabled = false; btn.classList.remove('spin'); if (location.hash === '#/meals') mealsView(); }
+  }
+  function recipeView(key) {
+    document.body.className = 'meals';
+    const c = recipesCache(); const r = c && c.recipes.find(x => x.key === key);
+    const p = c && c.plan.find(x => x.key === key);
+    app.innerHTML = mealsBar(r ? r.dish : (p ? p.meal : 'Recipe')) + '<main class="scroller recipe-body" id="recipe"></main>';
+    const el = $('#recipe');
+    if (!r || (!r.ingredients.length && !r.steps.length)) { el.innerHTML = '<div class="empty">No recipe yet. It fills in by itself within an hour.</div>'; return; }
+    const link = r.source_url && /^https:\/\//.test(r.source_url) ? ` · <a href="${esc(r.source_url)}" target="_blank" rel="noopener">full recipe</a>` : '';
+    el.innerHTML = `<div class="rc-day">${esc(r.day)}</div>
+      ${r.ingredients.length ? `<h3>Ingredients</h3><ul class="rc-ing">${r.ingredients.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+      <h3>${r.ingredients.length ? 'Steps' : 'Tonight'}</h3><ol class="rc-steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>
+      <p class="muted">Source: ${esc(r.source || '—')}${link}. Edit it in the sheet's Recipes tab.</p>`;
+  }
+
   // ---------- routing & events ----------
   function go(h) { if (location.hash === h) route(); else location.hash = h; }
   function route() {
@@ -255,6 +329,8 @@
     const h = location.hash || '#/', s = Store.settings();
     if (!s.configured && !s.skipped && h !== '#/settings') return go('#/settings');
     if (h.startsWith('#/list/')) return listView(decodeURIComponent(h.slice(7)));
+    if (h === '#/meals') return mealsView();
+    if (h.startsWith('#/recipe/')) return recipeView(decodeURIComponent(h.slice(9)));
     if (h === '#/settings') return settings();
     curListId = null; home();
   }
@@ -268,9 +344,11 @@
       case 'home-menu': return menu('', [{ label: 'Sync now', fn: Sync.run }, { label: 'Settings', fn: () => go('#/settings') }]);
       case 'edit-list': return editList(curListId);
       case 'list-menu': { const l = Store.list(curListId); return menu(l.name, [
+        { label: 'Share list (ColorNote, text, email…)', fn: () => shareList(l.name) },
         { label: 'Clear done items', fn: () => { Store.clearDone(l.name); Sync.run(); } },
         { label: 'Sync now', fn: Sync.run },
         { label: 'Delete list', danger: true, fn: async () => { if (await confirmBox(`Delete "${l.name}" and all its items?`)) { Store.deleteList(l.id); Sync.run(); go('#/'); } } }]); }
+      case 'meals-refresh': return refreshRecipes(b);
       case 's-test': return testSettings(false);
       case 's-save': return testSettings(true);
       case 's-skip': Store.saveSettings({ ...Store.settings(), skipped: true }); Store.seedDefaults(); return go('#/');
