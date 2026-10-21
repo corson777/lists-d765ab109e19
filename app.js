@@ -125,6 +125,8 @@
       <main class="cards scroller" id="cards"></main>
       <button class="fab" data-act="new-list" aria-label="New list">${I.plus}</button>`;
     renderCards();
+    const st = Store.settings();
+    if (st.url && st.token) loadRecipes(false).then(renderCards).catch(() => {}); // fresh "Tonight" line
     const cards = $('#cards');
     cards.addEventListener('click', e => { if (e.target.closest('.meals-card')) go('#/meals'); });
     pullToRefresh(cards);
@@ -136,8 +138,16 @@
     let ls = Store.lists().map(l => ({ l, m: Store.modified(l), its: Store.items(l.name) }));
     ls.sort(sortBy === 'modified' ? (a, b) => b.m.localeCompare(a.m) || a.l.name.localeCompare(b.l.name) : (a, b) => a.l.name.localeCompare(b.l.name));
     const ptr = el.querySelector('.ptr');
-    const s = Store.settings();
-    const pinned = s.url && s.token ? `<div class="meals-card" role="button"><span class="mc-icon">🍽</span><div class="mc-title">This week's meals &amp; recipes</div><span class="mc-go">›</span></div>` : '';
+    const s = Store.settings(), linked = !!(s.url && s.token);
+    // Connected to the sheet: "Meals" is the meal plan (the Week tab), not a checklist.
+    // The plain "Meals" list made at first setup is hidden while it has nothing open on it.
+    if (linked) ls = ls.filter(({ l, its }) => !(l.name.trim().toLowerCase() === 'meals' && !its.some(i => !i.done)));
+    let pinned = '';
+    if (linked) {
+      const c = recipesCache(), today = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date().getDay()];
+      const tonight = c ? c.plan.filter(p => p.day === today).map(p => p.meal).join(' + ') : '';
+      pinned = `<div class="meals-card" role="button"><span class="mc-icon">🍽</span><div class="mc-title">Meals<small>${tonight ? 'Tonight: ' + esc(tonight) : 'This week\'s plan &amp; recipes'}</small></div><span class="mc-go">›</span></div>`;
+    }
     el.innerHTML = pinned + (ls.length ? ls.map(({ l, m, its }) => {
       const [bg, edge] = col(l.color), all = its.length && its.every(i => i.done);
       return `<div class="card" data-id="${esc(l.id)}" style="background:${bg};border-left-color:${edge}">

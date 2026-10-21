@@ -1,6 +1,6 @@
 // Service worker: caches the app shell so the app opens with no signal.
 // Bump VERSION whenever you change any app file, so phones pick up the update.
-const VERSION = 'lists-v3';
+const VERSION = 'lists-v4';
 const SHELL = ['./', './index.html', './style.css', './store.js', './sync.js', './app.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png'];
 
