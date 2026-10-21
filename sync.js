@@ -10,9 +10,9 @@
 
   // Apps Script needs Content-Type text/plain (no CORS preflight). Google replies
   // with a 302 to script.googleusercontent.com, which fetch follows automatically.
-  async function call(body) {
+  async function call(body, ms = 25000) { // ms: give up after this long (saving a plan also fetches recipes)
     const s = Store.settings();
-    const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 25000);
+    const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), ms);
     try {
       const res = await fetch(s.url, { method: 'POST', redirect: 'follow', signal: ctrl.signal,
         headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ ...body, token: s.token }) });

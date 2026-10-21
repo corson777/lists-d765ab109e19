@@ -287,7 +287,7 @@
   function mealsView() {
     document.body.className = 'meals';
     document.querySelector('meta[name=theme-color]').content = '#7a3e1d';
-    app.innerHTML = mealsBar("This week's meals", `<button class="icon-btn" data-act="meals-refresh" aria-label="Refresh recipes">⟳</button>`) +
+    app.innerHTML = mealsBar("This week's meals", `<button class="icon-btn" data-act="plan" aria-label="Plan the week">${I.pencil}</button><button class="icon-btn" data-act="meals-refresh" aria-label="Refresh recipes">⟳</button>`) +
       '<main class="scroller meals-body" id="meals"><div class="empty">Loading…</div></main>';
     const draw = v => {
       const el = $('#meals'); if (!el || !v) return;
@@ -295,7 +295,7 @@
       const days = DAYS.map(d => ({ d, meals: v.plan.filter(p => p.day === d) })).filter(x => x.meals.length);
       el.innerHTML = days.length ? days.map(x => x.meals.map(m => `<a class="meal-row" href="#/recipe/${encodeURIComponent(m.key)}">
           <b>${esc(x.d.slice(0, 3))}</b><span>${esc(m.meal)}</span>${by[m.key] && (by[m.key].ingredients.length || by[m.key].steps.length) ? '<i>›</i>' : '<i class="soon">soon</i>'}</a>`).join('')).join('')
-        : '<div class="empty">No meal plan found yet.</div>';
+        : '<div class="empty">No meal plan found yet.<br><button class="btn primary" data-act="plan">Plan the week</button></div>';
       el.insertAdjacentHTML('beforeend', `<p class="muted pad">Recipes fill in by themselves within an hour of the plan changing. Updated ${new Date(v.at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.</p>`);
     };
     const c = recipesCache(); if (c) draw(c);
@@ -321,6 +321,62 @@
       <p class="muted">Source: ${esc(r.source || '—')}${link}. Edit it in the sheet's Recipes tab.</p>`;
   }
 
+  // ---------- plan the week (writes the sheet's Week tab) ----------
+  // One dinner per day, Saturday to Friday like the frame. Save replaces the whole
+  // week in the sheet (no merging), then the sheet fetches recipes, rebuilds the day
+  // tabs and the grocery list; the frame picks it up on its next refresh.
+  // What you type is kept on the phone as a draft until it is saved.
+  const PLAN_TAGS = { Tuesday: '🥘 Make-ahead night' };
+  const planDraft = () => { try { return JSON.parse(localStorage.getItem('cl.planDraft')) || null; } catch (e) { return null; } };
+  function planView() {
+    document.body.className = 'meals';
+    document.querySelector('meta[name=theme-color]').content = '#7a3e1d';
+    const s = Store.settings();
+    if (!s.url || !s.token) {
+      app.innerHTML = mealsBar('Plan the week') + `<main class="scroller meals-body"><div class="empty">Connect the app to your Google Sheet first (Settings), so the plan can be saved there.<br><button class="btn primary" data-act="settings">Settings</button></div></main>`;
+      return;
+    }
+    app.innerHTML = mealsBar('Plan the week') + `<main class="scroller meals-body"><form id="planform" autocomplete="off">
+        ${DAYS.map(d => `<label class="plan-row"><span class="plan-day">${d}${PLAN_TAGS[d] ? `<em>${esc(PLAN_TAGS[d])}</em>` : ''}</span>
+          <input name="${d}" maxlength="200" placeholder="Dinner, main dish first" enterkeyhint="next"></label>`).join('')}
+        <p class="muted">Saving replaces the whole week in the sheet. Leave a day blank if nothing is planned. Recipes, the grocery list and the kitchen frame update after you save.</p>
+        <div class="btn-row"><button type="button" class="btn" data-act="plan-clear">Clear all</button><button class="btn primary" id="plansave">Save week</button></div>
+      </form></main>`;
+    const f = $('#planform');
+    const fill = vals => DAYS.forEach(d => { f.elements[d].value = vals[d] || ''; });
+    const read = () => { const o = {}; DAYS.forEach(d => { o[d] = f.elements[d].value.trim(); }); return o; };
+    const fromPlan = v => { const o = {}; (v && v.plan || []).forEach(p => { o[p.day] = o[p.day] ? o[p.day] + ', ' + p.meal : p.meal; }); return o; };
+    const draft = planDraft();
+    if (draft) fill(draft.vals);
+    else {
+      const c = recipesCache(); if (c) fill(fromPlan(c));
+      loadRecipes(false).then(v => { if (!planDraft() && $('#planform') === f) fill(fromPlan(v)); }).catch(() => {});
+    }
+    f.addEventListener('input', () => localStorage.setItem('cl.planDraft', JSON.stringify({ at: Date.now(), vals: read() })));
+    f.addEventListener('keydown', e => { // Enter moves to the next day instead of saving
+      if (e.key !== 'Enter') return; e.preventDefault();
+      const i = DAYS.indexOf(e.target.name); if (i >= 0 && i < DAYS.length - 1) f.elements[DAYS[i + 1]].focus(); else e.target.blur();
+    });
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const vals = read(), plan = DAYS.map(d => ({ day: d, meal: vals[d] }));
+      if (!plan.some(p => p.meal)) return toast('Type at least one dinner first.');
+      if (!navigator.onLine) return toast("You're offline. Your plan is kept here; save it when you're back online.");
+      if (!(await confirmBox("Replace this week's plan in the sheet?", 'Save'))) return;
+      const btn = $('#plansave'); btn.disabled = true; btn.textContent = 'Saving… (finding recipes)';
+      try {
+        await Sync.call({ action: 'savePlan', plan }, 120000);
+        localStorage.removeItem('cl.planDraft');
+        await loadRecipes(true).catch(() => {});
+        toast('Week saved ✓ The frame updates within 30 minutes.');
+        go('#/meals');
+      } catch (err) {
+        btn.disabled = false; btn.textContent = 'Save week';
+        toast(err.name === 'AbortError' ? 'Still working in the sheet. Check This week\'s meals in a minute.' : 'Could not save: ' + err.message);
+      }
+    };
+  }
+
   // ---------- routing & events ----------
   function go(h) { if (location.hash === h) route(); else location.hash = h; }
   function route() {
@@ -330,6 +386,7 @@
     if (!s.configured && !s.skipped && h !== '#/settings') return go('#/settings');
     if (h.startsWith('#/list/')) return listView(decodeURIComponent(h.slice(7)));
     if (h === '#/meals') return mealsView();
+    if (h === '#/plan') return planView();
     if (h.startsWith('#/recipe/')) return recipeView(decodeURIComponent(h.slice(9)));
     if (h === '#/settings') return settings();
     curListId = null; home();
@@ -349,6 +406,11 @@
         { label: 'Sync now', fn: Sync.run },
         { label: 'Delete list', danger: true, fn: async () => { if (await confirmBox(`Delete "${l.name}" and all its items?`)) { Store.deleteList(l.id); Sync.run(); go('#/'); } } }]); }
       case 'meals-refresh': return refreshRecipes(b);
+      case 'plan': return go('#/plan');
+      case 'settings': return go('#/settings');
+      case 'plan-clear': return confirmBox('Clear every day on this screen? (Nothing is saved until you tap Save week.)', 'Clear').then(ok => {
+        if (!ok) return; document.querySelectorAll('#planform input').forEach(i => { i.value = ''; });
+        localStorage.setItem('cl.planDraft', JSON.stringify({ at: Date.now(), vals: {} })); });
       case 's-test': return testSettings(false);
       case 's-save': return testSettings(true);
       case 's-skip': Store.saveSettings({ ...Store.settings(), skipped: true }); Store.seedDefaults(); return go('#/');

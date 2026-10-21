@@ -100,6 +100,13 @@ body.meals { background: #fdf1e2; color: #4a2f1f; }
 .meal-row span { flex: 1; }
 .meal-row i { font-style: normal; font-size: 28px; color: #b0602e; } .meal-row i.soon { font-size: 14px; color: #999; }
 .recipe-body h3 { color: #a24d1e; margin: 18px 0 6px; font-size: 22px; }
+.plan-row { display: block; margin: 8px 0; padding: 10px 12px; background: #fffaf4; border-radius: 10px; box-shadow: 0 1px 2px rgba(120,60,20,.15); }
+.plan-day { display: flex; align-items: center; gap: 8px; font-weight: bold; color: #b0602e; font-size: 17px; margin-bottom: 6px; }
+.plan-day em { font-style: normal; font-weight: bold; font-size: 13px; color: #fff; background: #5f9e6e; border-radius: 10px; padding: 2px 8px; }
+.plan-row input { width: 100%; font-size: 20px; padding: 10px; border: 2px solid #ecc9a8; border-radius: 8px; background: #fff; color: #4a2f1f; }
+.plan-row input:focus { outline: none; border-color: #e8964f; }
+body.meals .btn.primary { background: #c4622d; }
+body.meals .empty .btn { margin-top: 16px; }
 .rc-day { color: #9a5a32; font-size: 17px; margin-top: 6px; }
 .rc-ing { padding-left: 22px; font-size: 19px; line-height: 1.5; }
 .rc-steps { padding-left: 26px; font-size: 19px; line-height: 1.45; } .rc-steps li { margin-bottom: 8px; }
